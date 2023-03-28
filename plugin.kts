@@ -1,22 +1,21 @@
 import com.intellij.codeInsight.daemon.impl.EditorTrackerListener
-import com.intellij.ide.AppLifecycleListener
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.Constraints.FIRST
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors.HIGHLIGHTED_REFERENCE
 import com.intellij.openapi.editor.markup.HighlighterTargetArea.EXACT_RANGE
 import com.intellij.openapi.editor.markup.RangeHighlighter
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.NlsActions.ActionText
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
-import com.intellij.util.messages.MessageBusConnection
 import liveplugin.*
 import java.util.regex.Matcher
 import java.util.regex.Pattern
-import kotlinx.coroutines.*
 
 //SPECIFY YOUR PREFIX HERE
-val VAULT_PREFIX = ""
+val VAULT_ADDRESS = ""
+val VAULT_STRIP_PREFIX = ""
 
 /* Declare shared state and a function to update it */
 lateinit var vaultSubstrings: MutableList<IntRange>
@@ -24,18 +23,19 @@ lateinit var docText: String
 val editorHighlighters: MutableList<RangeHighlighter> = mutableListOf()
 val vaultRegex: Pattern = Pattern.compile("vault:.+#.+")
 
-fun refresh() {
-    if (project?.currentFile?.fileType?.defaultExtension != "yml") {
+fun refresh(project: Project) {
+    if (project.currentFile?.fileType?.defaultExtension != "yml") {
         return
     }
 
     vaultSubstrings = mutableListOf<IntRange>()
-    docText = project?.currentDocument?.text!!
+    docText = project.currentDocument?.text!!
     val matcher: Matcher = vaultRegex.matcher(docText)
     matcher.results().forEach {
         vaultSubstrings.add(IntRange(it.start(), it.end() - 1))
-        val highlighter = project?.currentEditor?.markupModel
+        val highlighter = project.currentEditor?.markupModel
             ?.addRangeHighlighter(HIGHLIGHTED_REFERENCE, it.start(), it.end(), 1, EXACT_RANGE)
+        //todo this seems to be not efficient, needs a lot of memory
         editorHighlighters.add(highlighter!!)
     }
 }
@@ -60,8 +60,15 @@ val execute: (AnActionEvent) -> Unit = { event ->
     val offset = event.editor?.caretModel?.primaryCaret?.offset!!
     val pair: IntRange? = vaultSubstrings.find { offset >= it.first && offset <= it.last }
 
-    val vaultSubstring = docText.substring(pair!!).substringAfter("vault:").substringBefore("#")
-    liveplugin.openInBrowser(VAULT_PREFIX + vaultSubstring)
+    var vaultSubstring = docText.substring(pair!!)
+        .substringAfter("vault:")
+        .substringBefore("#")
+
+    if (vaultSubstring.startsWith(VAULT_STRIP_PREFIX)) {
+        vaultSubstring = vaultSubstring.substringAfter(VAULT_STRIP_PREFIX)
+    }
+
+    liveplugin.openInBrowser(VAULT_ADDRESS + vaultSubstring)
 }
 
 /* Register action */
@@ -69,21 +76,26 @@ registerAction("Open In Vault Browser", null, ActionGroupIds.EditorPopupMenu, FI
     AnAction("Open In Vault Browser", execute, updateActionVisibility))
 
 
-/* Connect to IDE events */
-//todo if autostart of this plugin is enabled, this must execute after project fully loaded, else project's message bus isn't available
-val connection = project
-    ?.messageBus
-    ?.connect(pluginDisposable)!!
-connection.subscribe(EditorTrackerListener.TOPIC, EditorTrackerListener {
-    refresh()
-})
-connection.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
-    override fun after(events: MutableList<out VFileEvent>) {
-        refresh()
-    }
-})
-/* Clean up after plugin unloading */
+/* Connect to IDE events for every opened project*/
+registerProjectOpenListener(pluginDisposable) { openedProject ->
+    //showInConsole("connect project " + openedProject.name, project!!)
+    val connection = openedProject
+        .messageBus
+        .connect(pluginDisposable)
+
+    connection.subscribe(EditorTrackerListener.TOPIC, EditorTrackerListener {
+ //       showInConsole("editor tracker event in project " + openedProject.name, project!!)
+        refresh(openedProject)
+    })
+    connection.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
+        override fun after(events: MutableList<out VFileEvent>) {
+            refresh(openedProject)
+        }
+    })
+
+}
+
 pluginDisposable.whenDisposed {
-    connection.disconnect()
+   // showInConsole("dispose", project!!)
     editorHighlighters.forEach { it.dispose() }
 }
