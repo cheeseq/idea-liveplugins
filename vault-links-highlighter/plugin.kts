@@ -10,17 +10,18 @@ import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.newvfs.BulkFileListener
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import liveplugin.*
+import liveplugin.PluginUtil.showInConsole
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 
-//SPECIFY YOUR PREFIX HERE
+//SPECIFY YOUR VAULT ADDRESS HERE
 val VAULT_ADDRESS = ""
 val VAULT_STRIP_PREFIX = ""
 
 /* Declare shared state and a function to update it */
-lateinit var vaultSubstrings: MutableList<IntRange>
-lateinit var docText: String
-val editorHighlighters: MutableList<RangeHighlighter> = mutableListOf()
+lateinit var currentEditorVaultSubstrings: MutableList<IntRange>
+lateinit var currentEditorText: String
+var currentEditorHighlighters: MutableList<RangeHighlighter> = mutableListOf()
 val vaultRegex: Pattern = Pattern.compile("vault:.+#.+")
 
 fun refresh(project: Project) {
@@ -28,15 +29,16 @@ fun refresh(project: Project) {
         return
     }
 
-    vaultSubstrings = mutableListOf<IntRange>()
-    docText = project.currentDocument?.text!!
-    val matcher: Matcher = vaultRegex.matcher(docText)
+    currentEditorVaultSubstrings = mutableListOf()
+    currentEditorHighlighters.forEach { it.dispose() }
+    currentEditorHighlighters = mutableListOf()
+    currentEditorText = project.currentDocument?.text!!
+    val matcher: Matcher = vaultRegex.matcher(currentEditorText)
     matcher.results().forEach {
-        vaultSubstrings.add(IntRange(it.start(), it.end() - 1))
+        currentEditorVaultSubstrings.add(IntRange(it.start(), it.end() - 1))
         val highlighter = project.currentEditor?.markupModel
             ?.addRangeHighlighter(HIGHLIGHTED_REFERENCE, it.start(), it.end(), 1, EXACT_RANGE)
-        //todo this seems to be not efficient, needs a lot of memory
-        editorHighlighters.add(highlighter!!)
+        currentEditorHighlighters.add(highlighter!!)
     }
 }
 
@@ -51,16 +53,16 @@ fun AnAction(@ActionText text: String? = null, performAction: (AnActionEvent) ->
 val updateActionVisibility: (AnActionEvent) -> Unit = { event ->
     //todo this better be placed in some form of event context
     val offset = event.editor?.caretModel?.primaryCaret?.offset!!
-    val pair: IntRange? = vaultSubstrings.find { offset >= it.first && offset <= it.last }
+    val pair: IntRange? = currentEditorVaultSubstrings.find { offset >= it.first && offset <= it.last }
 
     event.presentation.isEnabledAndVisible = pair != null
 }
 
 val execute: (AnActionEvent) -> Unit = { event ->
     val offset = event.editor?.caretModel?.primaryCaret?.offset!!
-    val pair: IntRange? = vaultSubstrings.find { offset >= it.first && offset <= it.last }
+    val pair: IntRange? = currentEditorVaultSubstrings.find { offset >= it.first && offset <= it.last }
 
-    var vaultSubstring = docText.substring(pair!!)
+    var vaultSubstring = currentEditorText.substring(pair!!)
         .substringAfter("vault:")
         .substringBefore("#")
 
@@ -78,13 +80,12 @@ registerAction("Open In Vault Browser", null, ActionGroupIds.EditorPopupMenu, FI
 
 /* Connect to IDE events for every opened project*/
 registerProjectOpenListener(pluginDisposable) { openedProject ->
-    //showInConsole("connect project " + openedProject.name, project!!)
     val connection = openedProject
         .messageBus
         .connect(pluginDisposable)
 
     connection.subscribe(EditorTrackerListener.TOPIC, EditorTrackerListener {
- //       showInConsole("editor tracker event in project " + openedProject.name, project!!)
+        showInConsole("count of highlighters " + currentEditorHighlighters.size, project!!)
         refresh(openedProject)
     })
     connection.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
@@ -92,10 +93,9 @@ registerProjectOpenListener(pluginDisposable) { openedProject ->
             refresh(openedProject)
         }
     })
-
+    refresh(openedProject)
 }
 
 pluginDisposable.whenDisposed {
-   // showInConsole("dispose", project!!)
-    editorHighlighters.forEach { it.dispose() }
+    currentEditorHighlighters.forEach { it.dispose() }
 }
