@@ -85,7 +85,6 @@ registerProjectOpenListener(pluginDisposable) { openedProject ->
         .connect(pluginDisposable)
 
     connection.subscribe(EditorTrackerListener.TOPIC, EditorTrackerListener {
-        showInConsole("count of highlighters " + currentEditorHighlighters.size, project!!)
         refresh(openedProject)
     })
     connection.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
